@@ -1,0 +1,13 @@
+{
+  "dry_run": false,
+  "answers": [
+    {
+      "question": "Is there a mechanism in place for individuals to challenge or appeal decisions made by your AI system (e.g., a denied loan or a hiring decision)?",
+      "options": ["Yes"],
+      "justification": "Model consumes customer records",
+      "source": "manual",
+      "driver": true
+    }
+    
+  ]
+}
