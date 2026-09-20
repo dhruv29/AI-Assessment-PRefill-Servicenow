@@ -1,0 +1,584 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "AICT Assessment Prefill",
+    "version": "1.0.0-poc",
+    "description": "Prefills unanswered questions on an AI Control Tower governance assessment from an external source.\n\nGuarantees:\n1. Prefill only — never submits an assessment or changes task state.\n2. Never overwrites an existing answer, whether a person or the platform wrote it.\n3. Never writes to questions the platform answers itself (Automate Response).\n4. Never coerces a value to fit a question type.\n\nIntended flow: GET questions -> draft answers -> POST with dry_run:true -> human review -> POST with dry_run:false.\n\nCall the GET immediately before posting. There is no schema to cache and no version to track."
+  },
+  "servers": [
+    { "url": "https://dev181885.service-now.com/api/x_1675350_aict_a_0/prefill" }
+  ],
+  "security": [ { "basicAuth": [] } ],
+  "tags": [
+    { "name": "questions", "description": "Read what a task still needs" },
+    { "name": "prefill", "description": "Write answers" },
+    { "name": "diagnose", "description": "Build-time only. Remove before production." }
+  ],
+  "paths": {
+    "/tasks/{task_number}/questions": {
+      "get": {
+        "tags": ["questions"],
+        "summary": "Get the questions this task still needs",
+        "description": "Returns applicable, unanswered questions with their exact text, type and valid option labels. Questions that are answered, automated, hidden by a condition, read-only or of a non-prefillable type are excluded and reported in counts.",
+        "operationId": "getTaskQuestions",
+        "parameters": [
+          { "$ref": "#/components/parameters/taskNumber" },
+          {
+            "name": "include_answered",
+            "in": "query",
+            "required": false,
+            "description": "true also returns questions already answered, each with answered:true.",
+            "schema": { "type": "string", "enum": ["true", "false"] }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Questions resolved",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/QuestionsEnvelope" },
+                "example": {
+                  "result": {
+                    "success": true,
+                    "task": "TASK0020123",
+                    "task_state": "2",
+                    "instance": "09641333c397c710ac731412b40131ba",
+                    "counts": {
+                      "open": 15,
+                      "already_answered": 2,
+                      "not_applicable": 5,
+                      "automated": 0,
+                      "not_prefillable": 0
+                    },
+                    "visibility_note": "5 question(s) are hidden by a condition that is not currently met.",
+                    "questions": [
+                      {
+                        "question": "Does your AI system use personal data?",
+                        "answered": false,
+                        "type": "choice",
+                        "mandatory": false,
+                        "options": ["Yes", "No"],
+                        "select": "single"
+                      },
+                      {
+                        "question": "Describe the human oversight mechanism",
+                        "answered": false,
+                        "type": "text",
+                        "mandatory": true
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Task not found, or no assessment instance exists for it yet",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" },
+                "examples": {
+                  "taskNotFound": {
+                    "summary": "Unknown task number",
+                    "value": { "result": { "success": false, "error": "task not found", "questions": [] } }
+                  },
+                  "noInstance": {
+                    "summary": "Task exists but the assessment has not been generated",
+                    "value": { "result": { "success": false, "error": "no assessment instance for task", "questions": [] } }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+
+    "/tasks/{task_number}/prefill": {
+      "post": {
+        "tags": ["prefill"],
+        "summary": "Prefill answers on a task's assessment",
+        "description": "Writes answers to unanswered questions. Answers to questions that are already answered, automated, hidden or read-only are skipped and counted, not rejected.\n\nA rejected answer stops only that question; the rest of the batch still writes, so a 200 can contain per-question failures in `rejected`.\n\nRe-running is safe: a second call reports everything under skipped_already_answered and writes nothing.",
+        "operationId": "prefillTask",
+        "parameters": [ { "$ref": "#/components/parameters/taskNumber" } ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/PrefillRequest" },
+              "examples": {
+                "dryRun": {
+                  "summary": "Preview — writes nothing",
+                  "value": {
+                    "dry_run": true,
+                    "answers": [
+                      {
+                        "question": "Does your AI system use personal data?",
+                        "options": ["Yes"],
+                        "justification": "Model consumes customer records",
+                        "source": "repo:acme/scoring#model_card.md"
+                      }
+                    ]
+                  }
+                },
+                "mixed": {
+                  "summary": "Choice and free-text together",
+                  "value": {
+                    "dry_run": false,
+                    "correlation_id": "skill-run-2026-09-20-001",
+                    "answers": [
+                      {
+                        "question": "Does your AI system use personal data?",
+                        "options": ["Yes"],
+                        "justification": "Model consumes customer records",
+                        "source": "repo:acme/scoring#model_card.md"
+                      },
+                      {
+                        "question": "Describe the human oversight mechanism",
+                        "value": "Manual review by the model owner before each release",
+                        "justification": "Approval gate in the deploy pipeline",
+                        "source": "repo:acme/scoring#.github/workflows/deploy.yml"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The call ran. Check `rejected` — a 200 can still contain per-question failures.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PrefillEnvelope" },
+                "examples": {
+                  "success": {
+                    "summary": "All answers written",
+                    "value": {
+                      "result": {
+                        "success": true,
+                        "dry_run": false,
+                        "correlation_id": "eecf97bfc3d7c710ac731412b401314e",
+                        "task": "TASK0020123",
+                        "instance": "09641333c397c710ac731412b40131ba",
+                        "prefilled": 2,
+                        "drivers_detected": 1,
+                        "skipped_already_answered": 0,
+                        "skipped_not_applicable": 0,
+                        "skipped_automated": 0,
+                        "skipped_not_prefillable": 0,
+                        "unmatched": [],
+                        "ambiguous": [],
+                        "rejected": [],
+                        "planned": [],
+                        "reevaluation": "triggered for 1 question(s)"
+                      }
+                    }
+                  },
+                  "dryRun": {
+                    "summary": "Preview — planned populated, nothing written",
+                    "value": {
+                      "result": {
+                        "success": true,
+                        "dry_run": true,
+                        "correlation_id": "1d9f5f7fc3d7c710ac731412b40131d0",
+                        "task": "TASK0020123",
+                        "instance": "09641333c397c710ac731412b40131ba",
+                        "prefilled": 1,
+                        "drivers_detected": 1,
+                        "skipped_already_answered": 0,
+                        "skipped_not_applicable": 0,
+                        "skipped_automated": 0,
+                        "skipped_not_prefillable": 0,
+                        "unmatched": [],
+                        "ambiguous": [],
+                        "rejected": [],
+                        "planned": [
+                          {
+                            "question": "Does your AI system use personal data?",
+                            "options": ["Yes"],
+                            "type": "choice",
+                            "field": "selected_response_options"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "partial": {
+                    "summary": "Some answers written, some rejected",
+                    "value": {
+                      "result": {
+                        "success": true,
+                        "dry_run": false,
+                        "task": "TASK0020123",
+                        "prefilled": 8,
+                        "drivers_detected": 0,
+                        "skipped_already_answered": 3,
+                        "skipped_not_applicable": 2,
+                        "skipped_automated": 4,
+                        "skipped_not_prefillable": 0,
+                        "unmatched": ["What is the intended risk tier"],
+                        "ambiguous": [],
+                        "rejected": [
+                          {
+                            "question": "Date of last model review",
+                            "reason": "type_mismatch",
+                            "expected": "date",
+                            "detail": "expected YYYY-MM-DD, received \"last quarter\""
+                          },
+                          {
+                            "question": "Does your AI system use personal data?",
+                            "reason": "invalid_option",
+                            "received": "Yes, definitely",
+                            "valid_options": ["Yes", "No"]
+                          },
+                          {
+                            "question": "Model owner",
+                            "reason": "justification_required"
+                          }
+                        ],
+                        "planned": []
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed body or missing answers array",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" },
+                "example": { "result": { "error": "body must contain an \"answers\" array" } }
+              }
+            }
+          },
+          "422": {
+            "description": "The call ran but resolution or state check failed. Nothing was written.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" },
+                "examples": {
+                  "closed": {
+                    "summary": "Assessment no longer accepts responses",
+                    "value": { "result": { "success": false, "error": "assessment is completed or cancelled", "assessment_state": "Completed" } }
+                  },
+                  "noInstance": {
+                    "summary": "No assessment generated for this task",
+                    "value": { "result": { "success": false, "error": "no assessment instance for task" } }
+                  },
+                  "empty": {
+                    "summary": "Empty payload",
+                    "value": { "result": { "success": false, "error": "answers array is empty" } }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+
+    "/tasks/{task_number}/diagnose": {
+      "get": {
+        "tags": ["diagnose"],
+        "summary": "Resolution, type and access report",
+        "description": "Build-time only. Exposes internal table structure — remove this resource before production.",
+        "operationId": "diagnoseTask",
+        "parameters": [ { "$ref": "#/components/parameters/taskNumber" } ],
+        "responses": {
+          "200": {
+            "description": "Diagnostic report",
+            "content": {
+              "application/json": {
+                "example": {
+                  "result": {
+                    "task": "TASK0020123",
+                    "task_sys_id": "a864dfffc357c710ac731412b40131e5",
+                    "task_state": "2",
+                    "related_record": "2464dfffc357c710ac731412b40131e0",
+                    "instance": "09641333c397c710ac731412b40131ba",
+                    "resolved_via": "related_record",
+                    "assessment_number": "ASMT0001001",
+                    "assessment_state": "Open",
+                    "template": "AI impact assessment",
+                    "question_types": { "choice": 22 },
+                    "ai_assist_plugin": false,
+                    "steps": ["task found", "instance resolved"],
+                    "access": {
+                      "_running_as": "aict.prefill.int",
+                      "_AssessmentInstanceUtil": "reachable",
+                      "_SmartAsmtCommonUtils": "reachable"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+
+  "components": {
+    "securitySchemes": {
+      "basicAuth": { "type": "http", "scheme": "basic" },
+      "oauth2": {
+        "type": "oauth2",
+        "description": "Preferred for production. Basic auth is acceptable for the POC only.",
+        "flows": {
+          "clientCredentials": {
+            "tokenUrl": "https://dev181885.service-now.com/oauth_token.do",
+            "scopes": {}
+          }
+        }
+      }
+    },
+
+    "parameters": {
+      "taskNumber": {
+        "name": "task_number",
+        "in": "path",
+        "required": true,
+        "description": "Governance assessment task number (sn_ai_governance_assessment_task), or its 32-character sys_id.",
+        "schema": { "type": "string", "example": "TASK0020123" }
+      }
+    },
+
+    "responses": {
+      "Unauthorized": {
+        "description": "Missing or invalid credentials, or the caller lacks the required role"
+      }
+    },
+
+    "schemas": {
+      "QuestionsEnvelope": {
+        "type": "object",
+        "description": "ServiceNow wraps every Scripted REST response in `result`.",
+        "properties": { "result": { "$ref": "#/components/schemas/QuestionsResult" } }
+      },
+
+      "QuestionsResult": {
+        "type": "object",
+        "required": ["success", "questions"],
+        "properties": {
+          "success": { "type": "boolean" },
+          "task": { "type": "string", "example": "TASK0020123" },
+          "task_state": { "type": "string", "description": "Governance task state value." },
+          "instance": { "type": "string", "description": "sn_smart_asmt_instance sys_id." },
+          "counts": { "$ref": "#/components/schemas/Counts" },
+          "visibility_note": {
+            "type": "string",
+            "description": "Present only when questions are hidden by an unmet condition. Those may become answerable once a driver question is answered."
+          },
+          "questions": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Question" }
+          },
+          "error": { "type": "string" }
+        }
+      },
+
+      "Counts": {
+        "type": "object",
+        "description": "Every question on the assessment falls into exactly one bucket. open + already_answered + not_applicable + automated + not_prefillable = total questions.",
+        "properties": {
+          "open": { "type": "integer", "description": "Applicable, unanswered, writable. These are the ones returned." },
+          "already_answered": { "type": "integer", "description": "A person or the engine already answered. Never overwritten." },
+          "not_applicable": { "type": "integer", "description": "Hidden by a conditional-visibility rule that is not currently met." },
+          "automated": { "type": "integer", "description": "Answered by the platform's Automate Response. Never written to." },
+          "not_prefillable": { "type": "integer", "description": "Read-only, or a type with no writable response column (attachment)." }
+        }
+      },
+
+      "Question": {
+        "type": "object",
+        "required": ["question", "answered", "type"],
+        "properties": {
+          "question": {
+            "type": "string",
+            "description": "The exact question text. This is the match key — send it back verbatim on the POST."
+          },
+          "answered": { "type": "boolean" },
+          "type": {
+            "type": "string",
+            "enum": ["choice", "text", "number", "date", "date_time", "reference", "attachment", "unknown"],
+            "description": "choice takes `options`; everything else takes `value`."
+          },
+          "mandatory": { "type": "boolean", "nullable": true },
+          "options": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Choice questions only. Send these labels back verbatim."
+          },
+          "select": {
+            "type": "string",
+            "enum": ["single", "multiple"],
+            "description": "Choice questions only. `single` rejects more than one option."
+          }
+        }
+      },
+
+      "PrefillRequest": {
+        "type": "object",
+        "required": ["answers"],
+        "properties": {
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "true validates and resolves everything, returns `planned`, and writes nothing."
+          },
+          "correlation_id": {
+            "type": "string",
+            "description": "Optional. Echoed in the response and written to the system log, so one run is traceable across the GET and POST."
+          },
+          "answers": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 200,
+            "items": { "$ref": "#/components/schemas/Answer" }
+          }
+        }
+      },
+
+      "Answer": {
+        "type": "object",
+        "required": ["question", "justification"],
+        "description": "Supply `options` for a choice question and `value` for everything else.",
+        "properties": {
+          "question": {
+            "type": "string",
+            "description": "Exact text from the GET response. Matching normalises markup, HTML entities, non-breaking spaces, smart quotes and dashes, but not wording."
+          },
+          "options": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Choice questions. Exact option labels from the GET."
+          },
+          "value": {
+            "type": "string",
+            "description": "Non-choice questions. Dates YYYY-MM-DD, date_time YYYY-MM-DD HH:MM:SS, reference a 32-character sys_id (comma-separated for several)."
+          },
+          "justification": {
+            "type": "string",
+            "description": "Required. An answer with no stated basis is not reviewable evidence. Stored prefixed with [AI-PREFILL] and the source."
+          },
+          "source": {
+            "type": "string",
+            "description": "Where the answer came from. Recorded in the justification for audit.",
+            "example": "repo:acme/scoring#model_card.md"
+          },
+          "driver": {
+            "type": "boolean",
+            "description": "Optional override. Driver questions are detected automatically from the template's conditions; set this only to force an answer into the first pass."
+          }
+        }
+      },
+
+      "PrefillEnvelope": {
+        "type": "object",
+        "properties": { "result": { "$ref": "#/components/schemas/PrefillResult" } }
+      },
+
+      "PrefillResult": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean", "description": "The call ran. Per-question failures are in `rejected`." },
+          "dry_run": { "type": "boolean" },
+          "correlation_id": { "type": "string" },
+          "task": { "type": "string" },
+          "instance": { "type": "string" },
+          "prefilled": { "type": "integer", "description": "Answers written. On a dry run, answers that would have been written." },
+          "drivers_detected": { "type": "integer", "description": "Answers routed to the first pass because other questions' visibility depends on them." },
+          "skipped_already_answered": { "type": "integer" },
+          "skipped_not_applicable": { "type": "integer" },
+          "skipped_automated": { "type": "integer" },
+          "skipped_not_prefillable": { "type": "integer" },
+          "unmatched": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Question text that matched nothing on this assessment. Should be empty when the caller fetched questions first; anything here means the two calls drifted apart."
+          },
+          "ambiguous": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Two questions on the assessment share identical wording, so neither was written. Report to the assessment owner."
+          },
+          "rejected": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Rejection" }
+          },
+          "planned": {
+            "type": "array",
+            "description": "Dry run only: exactly what would be written.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "question": { "type": "string" },
+                "options": { "type": "array", "items": { "type": "string" } },
+                "value": { "type": "string" },
+                "type": { "type": "string" },
+                "field": { "type": "string", "description": "The column that would receive the value." }
+              }
+            }
+          },
+          "reevaluation": {
+            "type": "string",
+            "description": "Present when driver answers were written. Reports whether the platform recomputed conditional visibility, which can reveal further questions within the same call.",
+            "example": "triggered for 1 question(s)"
+          },
+          "error": { "type": "string", "description": "Present only when nothing was written." },
+          "assessment_state": { "type": "string" }
+        }
+      },
+
+      "Rejection": {
+        "type": "object",
+        "description": "One question failed. The rest of the batch still wrote.",
+        "properties": {
+          "question": { "type": "string" },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "invalid_option",
+              "cardinality",
+              "justification_required",
+              "type_mismatch",
+              "no value supplied",
+              "platform_refused",
+              "empty question text"
+            ]
+          },
+          "expected": { "type": "string", "description": "type_mismatch: the type the question expects." },
+          "detail": { "type": "string" },
+          "received": { "type": "string", "description": "invalid_option: the label that was sent." },
+          "valid_options": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "invalid_option: the labels this question accepts."
+          },
+          "status": { "type": "integer", "nullable": true, "description": "platform_refused: the platform's own status code." }
+        }
+      },
+
+      "ErrorEnvelope": {
+        "type": "object",
+        "properties": {
+          "result": {
+            "type": "object",
+            "properties": {
+              "success": { "type": "boolean" },
+              "error": { "type": "string" },
+              "assessment_state": { "type": "string" },
+              "questions": { "type": "array", "items": {} }
+            }
+          }
+        }
+      }
+    }
+  }
+}
