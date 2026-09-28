@@ -3,7 +3,7 @@
 Maintainer's guide to the Script Include. Every method, what it does, what it
 returns, and why it exists.
 
-Scope: `x_1675350_aict_a_0` · 28 methods · 3 public
+Scope: `x_1675350_aict_a_0` · 27 methods · 3 public
 
 - [Call flow](#call-flow)
 - [Public methods](#public-methods)
@@ -34,8 +34,8 @@ getTaskQuestions
     ├── _isApplicable            false → counts.not_applicable
     ├── _isAnswered              true → counts.already_answered
     ├── _isChoiceType
-    ├── _options                 valid option labels
-    │   └── _optionLabel
+    ├── _options                 valid option labels, from the cached index
+    │   └── _optionIndex         built once: two queries for the assessment
     └── _publicType              the label the API exposes
 ```
 
@@ -64,8 +64,8 @@ _apply  (per answer)
 ├── _isAnswered                  → skipped_already_answered
 ├── (justification check)        → rejected
 └── _write
-    ├── _writeChoice   ── _optionLabel, _norm, _update, _log
-    └── _writeValue    ── _responseField, _validate, _update, _log
+    ├── _writeChoice   ── _optionIndex, _norm, _update
+    └── _writeValue    ── _responseField, _validate, _update
 ```
 
 `_update` is the only method that persists anything.
@@ -329,20 +329,30 @@ One-line branch on `_isChoiceType`.
 
 Handles radio, dropdown and checkbox.
 
-1. Build `{normalised label: {instance, definition}}` from the option instances
+1. Read this question's options from `_optionIndex` (already cached)
 2. Resolve every requested label; any miss → `rejected` with `valid_options`
 3. Single-select given more than one option → `rejected` with `cardinality`
 4. Dry run stops here, recording to `planned`
-5. Set `is_option_selected = true` on each target option instance
-6. Single-select: clear `is_option_selected` on the siblings
-7. `_update` with `selected_response_options` = the **definition** sys_ids
+5. **`_update` with `selected_response_options`** = the definition sys_ids
+6. Mirror onto the option instances: `is_option_selected = true` on each target
+7. Single-select: clear `is_option_selected` on the siblings
 
 **Both storage locations are written**, because the platform writes both. The
 list field on the question instance is what the form reads; the per-option
-booleans are what report and PDF code reads. Writing only the booleans saves an
-answer that never appears on screen.
+booleans are what report and PDF code reads.
 
-Note step 7 takes the `sn_smart_asmt_response_option` sys_id, not the
+**Order matters.** The authoritative field goes first. If step 5 is refused,
+nothing has been touched. If the mirror in 6–7 then fails, the answer is still
+correctly recorded and the report carries a `warnings` entry rather than
+unwinding a good write.
+
+Writing the mirror first — which is what an earlier version did — could leave
+options visibly ticked on the form with no recorded answer, since
+`is_responded` and `selected_response_options` are both set inside `_update`.
+`_isAnswered` would then report that question as unanswered while the form
+showed it filled in.
+
+Step 5 takes the `sn_smart_asmt_response_option` sys_id, not the
 `sn_smart_asmt_response_option_instance` one. Easy to get wrong.
 
 ### `_writeValue(qGR, ans, meta, r)` → boolean
@@ -377,16 +387,28 @@ and falls back to a direct `setValue` + `update`.
 
 ## Utilities
 
-### `_options(questionInstanceId)` → string[]
+### `_optionIndex(instanceId)` → object
 
-Option labels for a question, in `order`. Used by the GET so the caller only
-ever sends a label that will match.
+Every option on the assessment, keyed by question instance:
 
-### `_optionLabel(optionInstanceGR)` → string
+```
+{ <question_instance sys_id>: [ { label, instance, definition, selected } ] }
+```
 
-Dot-walks to `assessment_response_option.text_label`, falling back to the
-display value. `text_label` is the field the platform itself matches on — an
-earlier version used `label`, which does not exist.
+Two queries, cached on the call for the life of the request. Pass 1 reads the
+option instances for the assessment and collects the definition sys_ids in use;
+pass 2 reads the labels for just those definitions. Nothing is dot-walked.
+
+The shape it replaced ran one query per question and dot-walked
+`assessment_response_option.text_label` per option row — 22 queries plus 66
+lookups on a 22-question template, repeated inside every write. Invalidated
+(`this._optIdx = null`) after a choice write, since the `selected` flags go
+stale.
+
+### `_options(questionInstanceId, instanceId)` → string[]
+
+Option labels for one question, in `order`, read from the index. Used by the
+GET so the caller only ever sends a label that will match.
 
 ### `_norm(s)` → string
 
@@ -400,12 +422,6 @@ curly apostrophe nobody can see.
 
 It deliberately does **not** strip punctuation or normalise wording. A reworded
 question should surface in `unmatched`, not be fuzzy-matched to something else.
-
-### `_log(qGR, ans, written, r)` → void
-
-`gs.info` line per write, carrying the correlation id, task, question and
-source. Gated on `CFG.DEBUG` — turn it off for production, since the response
-payload already carries the full reconciliation.
 
 ### `_accessCheck()` → object
 
@@ -429,6 +445,8 @@ Set in `initialize`, or during a call:
 | `WF` | initialize | Completed/cancelled workflow state sys_ids |
 | `_meta` | `_questionMeta` | Per-definition metadata cache |
 | `_visCache` | `_isApplicable` | Condition result cache; reset per `prefill` |
+| `_optIdx` | `_optionIndex` | Option index; cleared after a choice write |
+| `_optIdxFor` | `_optionIndex` | Instance the index was built for |
 | `_dry` | `prefill` | Dry run flag |
 | `_cid` | `prefill` | Correlation id for this run |
 | `_lastRoute` | `_getInstance` | Which resolution route worked |
@@ -436,8 +454,8 @@ Set in `initialize`, or during a call:
 `QT` and `WF` read the same `gs.getProperty` names the platform uses, with the
 same defaults. If ServiceNow changes a question type sys_id, both follow.
 
-**Not thread-safe across calls.** `_dry`, `_cid` and `_visCache` are per-call
-state on the instance. Create a new `AIGovAssessmentPrefill()` per request —
+**Not thread-safe across calls.** `_dry`, `_cid`, `_visCache` and `_optIdx` are
+per-call state on the instance. Create a new `AIGovAssessmentPrefill()` per request —
 the REST resources already do.
 
 ---
@@ -453,7 +471,6 @@ the REST resources already do.
 | Add a new rejection reason | Push to `r.rejected` and document the enum in `openapi.json` |
 | Change text matching tolerance | `_norm` — but read the note about not fuzzy-matching first |
 | Turn off condition recomputation | `CFG.REEVALUATE_CONDITIONS` |
-| Silence the log | `CFG.DEBUG` |
 
 ### Platform dependencies
 
