@@ -106,6 +106,12 @@ Writing only the second saves the answer without it appearing on the form.
 Note the list takes the *definition* option sys_id
 (`sn_smart_asmt_response_option`), not the instance one.
 
+`selected_response_options` is written **first**, because it is the
+authoritative field — the per-option booleans mirror it. If the mirror then
+fails, the answer is still correctly recorded and the response carries a
+`warnings` entry. Writing the mirror first would leave options visibly ticked
+with no recorded answer, which `_isAnswered` would then report as unanswered.
+
 **Everything else** uses one column, chosen by question type:
 
 | Question type | Column |
@@ -121,6 +127,15 @@ The type lives in `sn_smart_asmt_question.question_type` — a reference, not a
 string field called `type`. The mapping mirrors
 `AssessmentInstanceUtilSNC._getFieldContainingResponse` and reads the same
 system properties, so it follows the platform if those change.
+
+---
+
+## Query cost
+
+Options for the whole assessment are read in two queries and cached per call —
+one for the option instances, one for the labels of just the definitions in
+use. The earlier shape ran a query per question plus a dot-walk per option row,
+and repeated it inside every write.
 
 ---
 
@@ -202,8 +217,11 @@ Flags on `this.CFG`:
 | `PROVENANCE_MARKER` | `[AI-PREFILL]` | Prefixed to the justification |
 | `REQUIRE_JUSTIFICATION` | `true` | Reject an answer with no stated basis |
 | `REEVALUATE_CONDITIONS` | `true` | Recompute visibility after driver answers |
-| `DEBUG` | `true` | `gs.info` tracing — turn off for production |
 | `MAX_ANSWERS` | `200` | Payload ceiling |
+
+No `gs.info` tracing: the response payload carries the full reconciliation, so
+logging it again only duplicated it. `gs.error` remains on two genuine failure
+paths.
 
 **On `MARK_AI_SUGGESTED`:** `is_response_ai_suggested` belongs to Now Assist
 Response Assist and means the answer came from the platform's own suggestion
@@ -329,7 +347,6 @@ This is a POC. Known gaps:
 - Cross-scope privileges (`sys_scope_privilege`) were auto-granted on the PDI.
   They are part of the application and must travel with it, or it fails on
   another instance with security errors.
-- `DEBUG: true` writes a log line per answer. Turn it off.
 
 **Operational**
 - No rate limiting or idempotency key. Re-running is safe because of the
