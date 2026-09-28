@@ -1,44 +1,18 @@
-// =============================================================================
 // AIGovAssessmentPrefill
-//
-// Prefills unanswered questions on an AI governance assessment from an
-// external source.
-//
-//   getTaskQuestions(taskRef, includeAnswered)  what this task still needs
-//   prefill(taskRef, answers, opts)             write, or preview with dry_run
-//   diagnose(taskRef)                           chain, types and access report
-//
-// Rules, in order of precedence:
-//   1. never submits an assessment or changes task state
-//   2. never overwrites an existing answer
-//   3. never writes to a question the platform answers itself
-//   4. never coerces a value to fit a type
-// =============================================================================
+// Prefills unanswered questions on an AI governance assessment.
+// Never submits, never overwrites, never writes to engine-owned questions,
+// never coerces a value to fit a type.
 
 var AIGovAssessmentPrefill = Class.create();
 
 AIGovAssessmentPrefill.prototype = {
-
     initialize: function () {
-
         this.CFG = {
-            // Mark the question answered so the value renders on the form.
             MARK_RESPONDED: true,
-
-            // is_response_ai_suggested belongs to Now Assist Response Assist
-            // and means the answer came from the platform's own suggestion
-            // engine. Ours comes from an external system, so this stays false.
-            MARK_AI_SUGGESTED: false,
-
+            MARK_AI_SUGGESTED: false,        // Now Assist flag; our answers are not its
             PROVENANCE_MARKER: '[AI-PREFILL]',
             REQUIRE_JUSTIFICATION: true,
-
-            // Recompute visibility after writing a question others depend on,
-            // so questions revealed by this call become writable in it.
-            REEVALUATE_CONDITIONS: true,
-
-            DEBUG: true,
-
+            REEVALUATE_CONDITIONS: true,     // recompute visibility after driver answers
             MAX_ANSWERS: 200
         };
 
@@ -54,7 +28,6 @@ AIGovAssessmentPrefill.prototype = {
             RESULT_SET: 'sn_smart_asmt_condition_result_set'
         };
 
-        // Same properties and defaults the platform uses.
         var p = function (name, dflt) { return gs.getProperty('sn_smart_asmt.' + name, dflt); };
         this.QT = {
             CALENDAR:   p('calender_question_type_id',   'a43696cb7771211058119a372e5a9989'),
@@ -69,17 +42,15 @@ AIGovAssessmentPrefill.prototype = {
         };
 
         this.WF = {
-            COMPLETED: gs.getProperty('sn_smart_asmt.completed_workflow_state',
-                                      'b0db445acb26211093b90cbfe8076d5a'),
-            CANCELLED: gs.getProperty('sn_smart_asmt.cancelled_workflow_state',
-                                      'f3db045acb26211093b90cbfe8076dc2')
+            COMPLETED: p('completed_workflow_state', 'b0db445acb26211093b90cbfe8076d5a'),
+            CANCELLED: p('cancelled_workflow_state', 'f3db045acb26211093b90cbfe8076dc2')
         };
 
         this._meta = {};
         this._visCache = {};
     },
 
-    // Mirrors AssessmentInstanceUtilSNC._getFieldContainingResponse.
+    // mirrors AssessmentInstanceUtilSNC._getFieldContainingResponse
     _responseField: function (meta) {
         switch (meta.typeId) {
             case this.QT.RADIO:
@@ -122,6 +93,8 @@ AIGovAssessmentPrefill.prototype = {
 
         var d = new GlideRecord(this.T.QUESTION_DEF);
         if (d.get(defSysId)) {
+            // question_type, not 'type' — reading the wrong field silently
+            // routes dates and numbers into text_response
             meta.typeId     = d.getValue('question_type');
             meta.enableTime = (d.getValue('enable_time') + '') === 'true';
             meta.readonly   = (d.getValue('readonly_response') + '') === 'true';
@@ -134,9 +107,6 @@ AIGovAssessmentPrefill.prototype = {
         return meta;
     },
 
-    // =========================================================================
-    // READ
-    // =========================================================================
     getTaskQuestions: function (taskRef, includeAnswered) {
         var out = { success: false, questions: [] };
 
@@ -181,7 +151,7 @@ AIGovAssessmentPrefill.prototype = {
                 mandatory: meta.mandatory
             };
             if (this._isChoiceType(meta)) {
-                entry.options = this._options(qGR.getUniqueValue());
+                entry.options = this._options(qGR.getUniqueValue(), instanceId);
                 entry.select = meta.multi ? 'multiple' : 'single';
             }
             out.questions.push(entry);
@@ -200,11 +170,6 @@ AIGovAssessmentPrefill.prototype = {
         return out;
     },
 
-    // =========================================================================
-    // WRITE
-    //   answers: [ { question, value | options[], justification, source, driver } ]
-    //   opts:    { dry_run, correlation_id }
-    // =========================================================================
     prefill: function (taskRef, answers, opts) {
         opts = opts || {};
         this._dry = (opts.dry_run === true);
@@ -229,7 +194,6 @@ AIGovAssessmentPrefill.prototype = {
         if (gs.nil(instanceId)) { r.error = 'no assessment instance for task'; return r; }
         r.instance = instanceId;
 
-        // The platform gates on the assessment workflow state, not task state.
         var inst = new GlideRecord(this.T.INSTANCE);
         if (inst.get(instanceId)) {
             var st = inst.getValue('state') + '';
@@ -242,10 +206,6 @@ AIGovAssessmentPrefill.prototype = {
 
         var map = this._questionMap(instanceId, r);
 
-        // Answers to questions that other questions' visibility depends on
-        // are written first. Which ones those are is discovered from the
-        // condition results — the caller cannot know the conditional logic.
-        // An explicit driver:true still forces the first pass.
         var drivers = this._driverQuestionInstances(instanceId);
         var first = [], rest = [];
         for (var i = 0; i < answers.length; i++) {
@@ -258,8 +218,6 @@ AIGovAssessmentPrefill.prototype = {
 
         this._apply(first, map, r);
 
-        // Re-evaluation between passes, so questions revealed by a driver
-        // answer become writable within this same call.
         if (first.length && !this._dry && this.CFG.REEVALUATE_CONDITIONS) {
             this._reevaluate(first, map, r);
             this._visCache = {};
@@ -271,12 +229,9 @@ AIGovAssessmentPrefill.prototype = {
         return r;
     },
 
-    // Question instances that some condition tests. Answering one of these
-    // can change another question's visibility.
     _driverQuestionInstances: function (instanceId) {
         var drivers = {};
 
-        // the result sets in play on this assessment
         var sets = {};
         var q = new GlideRecord(this.T.QUESTION_INST);
         q.addQuery('assessment_instance', instanceId);
@@ -299,8 +254,6 @@ AIGovAssessmentPrefill.prototype = {
         return drivers;
     },
 
-    // Best effort. If unreachable, dependent questions stay hidden for this
-    // call and the caller can re-run.
     _reevaluate: function (batch, map, r) {
         var util;
         try {
@@ -359,9 +312,6 @@ AIGovAssessmentPrefill.prototype = {
                                         : this._writeValue(qGR, ans, meta, r);
     },
 
-    // A choice answer lives in two places and the platform writes both:
-    // question_instance.selected_response_options (definition option sys_ids),
-    // and is_option_selected on each option instance.
     _writeChoice: function (qGR, ans, meta, r) {
         var wanted = ans.options || (gs.nil(ans.value) ? [] : [ans.value]);
         if (!wanted.length) {
@@ -370,15 +320,11 @@ AIGovAssessmentPrefill.prototype = {
             return false;
         }
 
+        var rows = this._optionIndex(qGR.getValue('assessment_instance'))[qGR.getUniqueValue()] || [];
         var byLabel = {}, valid = [];
-        var oGR = new GlideRecord(this.T.OPTION_INST);
-        oGR.addQuery('question_instance', qGR.getUniqueValue());
-        oGR.query();
-        while (oGR.next()) {
-            var label = this._optionLabel(oGR);
-            byLabel[this._norm(label)] = { instance: oGR.getUniqueValue(),
-                                           definition: oGR.getValue('assessment_response_option') };
-            valid.push(label);
+        for (var o = 0; o < rows.length; o++) {
+            byLabel[this._norm(rows[o].label)] = rows[o];
+            valid.push(rows[o].label);
         }
 
         var targets = [], defIds = [];
@@ -405,26 +351,39 @@ AIGovAssessmentPrefill.prototype = {
             return true;
         }
 
-        for (var t = 0; t < targets.length; t++) {
-            var sel = new GlideRecord(this.T.OPTION_INST);
-            if (!sel.get(targets[t])) continue;
-            sel.setValue('is_option_selected', true);
-            sel.update();
-        }
-
-        // single select: clear the siblings, as the platform does
-        if (!meta.multi && targets.length === 1) {
-            var others = new GlideRecord(this.T.OPTION_INST);
-            others.addQuery('question_instance', qGR.getUniqueValue());
-            others.addQuery('sys_id', '!=', targets[0]);
-            others.setValue('is_option_selected', false);
-            others.updateMultiple();
-        }
-
+        // authoritative field first — the option booleans only mirror it
         if (!this._update(qGR, 'selected_response_options', defIds.join(','), ans, r))
             return false;
 
-        this._log(qGR, ans, wanted.join(', '), r);
+        var mirrored = true;
+        for (var t = 0; t < targets.length; t++) {
+            var sel = new GlideRecord(this.T.OPTION_INST);
+            if (!sel.get(targets[t]) ) { mirrored = false; continue; }
+            sel.setValue('is_option_selected', true);
+            if (!sel.update()) mirrored = false;
+        }
+
+        if (!meta.multi && targets.length === 1) {
+            // looped, not updateMultiple, which bypasses ACLs
+            var others = new GlideRecord(this.T.OPTION_INST);
+            others.addQuery('question_instance', qGR.getUniqueValue());
+            others.addQuery('sys_id', '!=', targets[0]);
+            others.addQuery('is_option_selected', true);
+            others.query();
+            while (others.next()) {
+                others.setValue('is_option_selected', false);
+                if (!others.update()) mirrored = false;
+            }
+        }
+
+        if (!mirrored) {
+            r.warnings = r.warnings || [];
+            r.warnings.push({ question: ans.question, warning: 'option_mirror_incomplete',
+                              detail: 'the answer was recorded but is_option_selected ' +
+                                      'could not be fully synchronised' });
+        }
+
+        this._optIdx = null;
         return true;
     },
 
@@ -449,16 +408,10 @@ AIGovAssessmentPrefill.prototype = {
         }
 
         if (!this._update(qGR, field, ans.value, ans, r)) return false;
-
-        this._log(qGR, ans, ans.value, r);
         return true;
     },
 
-    // The only place that writes. Routes through the platform utility so the
-    // state assertion and AI flag are the platform's; falls back to a direct
-    // write if that class is unreachable cross-scope.
     _update: function (qGR, field, value, ans, r) {
-        // justification and provenance first, so one update carries everything
         if (qGR.isValidField('justification')) {
             var j = this.CFG.PROVENANCE_MARKER + ' ';
             if (!gs.nil(ans.source)) j += '(' + ans.source + ') ';
@@ -474,7 +427,6 @@ AIGovAssessmentPrefill.prototype = {
                 .updateQuestionInstance(qGR, field, value, this.CFG.MARK_AI_SUGGESTED);
             return true;
         } catch (e) {
-            // the utility throws {message, status} for a refused response
             if (e && e.message) {
                 r.rejected.push({ question: ans.question, reason: 'platform_refused',
                                   detail: String(e.message), status: e.status || null });
@@ -486,23 +438,12 @@ AIGovAssessmentPrefill.prototype = {
         }
     },
 
-    _log: function (qGR, ans, written, r) {
-        if (!this.CFG.DEBUG) return;
-        gs.info('[AIGovAssessmentPrefill] ' + this._cid + ' ' + r.task +
-                ' | ' + qGR.getDisplayValue('assessment_question') +
-                ' = ' + String(written).substring(0, 200) +
-                ' | source: ' + (ans.source || 'unspecified'));
-    },
-
-    // =========================================================================
-    // state checks
-    // =========================================================================
     _isAutomated: function (qGR) {
         return qGR.getValue('is_automated_response') == '1';
     },
 
-    // One column per question type. Scanning every column reads an unrelated
-    // default as an answer: currency_response is "0" on every row.
+    // one column per type: currency_response defaults to "0" on every row,
+    // so scanning all of them reads every question as answered
     _isAnswered: function (qGR, meta) {
         if (qGR.getValue('is_responded') == '1') return true;
 
@@ -516,9 +457,8 @@ AIGovAssessmentPrefill.prototype = {
         return !(gs.nil(v) || v === '' || v === 'null');
     },
 
-    // visibility_result -> condition_result_set.result. No result set means no
-    // condition. A dangling reference fails open: offering a hidden question is
-    // safer here than silently dropping one.
+    // visibility_result -> condition_result_set.result. Fails open: offering
+    // a hidden question beats silently dropping one
     _isApplicable: function (qGR) {
         var vr = qGR.getValue('visibility_result');
         if (gs.nil(vr)) return true;
@@ -530,9 +470,8 @@ AIGovAssessmentPrefill.prototype = {
         return visible;
     },
 
-    // Validation is the platform's job — its before-update business rules
-    // abort a bad value, surfacing as platform_refused. The exception is a
-    // date column, where a malformed value can be stored empty not refused.
+    // the platform's business rules validate everything else and surface as
+    // platform_refused; a bad date can store empty rather than be refused
     _validate: function (value, meta) {
         if (meta.typeId !== this.QT.CALENDAR) return null;
 
@@ -546,9 +485,6 @@ AIGovAssessmentPrefill.prototype = {
             ', received "' + v + '"';
     },
 
-    // =========================================================================
-    // resolution
-    // =========================================================================
     _getTask: function (ref) {
         var gr = new GlideRecord(this.T.TASK);
         if (/^[0-9a-f]{32}$/i.test(ref)) return gr.get(ref) ? gr : null;
@@ -558,8 +494,8 @@ AIGovAssessmentPrefill.prototype = {
         return gr.next() ? gr : null;
     },
 
-    // Scope items sit on the AI system task referenced by related_record,
-    // not on the governance task itself. Both routes are tried.
+    // scope items sit on the AI system task via related_record, not on the
+    // governance task itself
     _getInstance: function (taskGR) {
         this._lastRoute = null;
 
@@ -600,6 +536,7 @@ AIGovAssessmentPrefill.prototype = {
             var text = qGR.getDisplayValue('assessment_question');
             var key = this._norm(text);
             if (!key) continue;
+            // duplicate wording: write neither
             if (map[key]) {
                 if (map[key] !== '__AMBIGUOUS__') r.ambiguous.push(text);
                 map[key] = '__AMBIGUOUS__';
@@ -610,21 +547,59 @@ AIGovAssessmentPrefill.prototype = {
         return map;
     },
 
-    _options: function (questionInstanceId) {
-        var labels = [];
+    _optionIndex: function (instanceId) {
+        if (this._optIdx && this._optIdxFor === instanceId) return this._optIdx;
+
+        var rows = [], defIds = {};
         var oGR = new GlideRecord(this.T.OPTION_INST);
-        oGR.addQuery('question_instance', questionInstanceId);
+        oGR.addQuery('question_instance.assessment_instance', instanceId);
         oGR.orderBy('order');
         oGR.query();
-        while (oGR.next()) labels.push(this._optionLabel(oGR));
-        return labels;
+        while (oGR.next()) {
+            var def = oGR.getValue('assessment_response_option');
+            rows.push({
+                question: oGR.getValue('question_instance'),
+                instance: oGR.getUniqueValue(),
+                definition: def,
+                selected: oGR.getValue('is_option_selected') == '1',
+                fallback: oGR.getDisplayValue('assessment_response_option')
+            });
+            if (!gs.nil(def)) defIds[def] = true;
+        }
+
+        var labels = {}, ids = [];
+        for (var d in defIds) ids.push(d);
+        if (ids.length) {
+            var defGR = new GlideRecord(this.T.OPTION_DEF);
+            defGR.addQuery('sys_id', 'IN', ids.join(','));
+            defGR.query();
+            while (defGR.next())
+                labels[defGR.getUniqueValue()] = defGR.getValue('text_label');
+        }
+
+        var idx = {};
+        for (var i = 0; i < rows.length; i++) {
+            var row = rows[i];
+            var label = labels[row.definition];
+            if (gs.nil(label) || label === 'null') label = row.fallback;
+            (idx[row.question] = idx[row.question] || []).push({
+                label: label,
+                instance: row.instance,
+                definition: row.definition,
+                selected: row.selected
+            });
+        }
+
+        this._optIdx = idx;
+        this._optIdxFor = instanceId;
+        return idx;
     },
 
-    _optionLabel: function (optionInstanceGR) {
-        var label = optionInstanceGR.assessment_response_option.text_label + '';
-        if (gs.nil(label) || label === 'undefined')
-            label = optionInstanceGR.getDisplayValue('assessment_response_option');
-        return label;
+    _options: function (questionInstanceId, instanceId) {
+        var rows = this._optionIndex(instanceId)[questionInstanceId] || [];
+        var labels = [];
+        for (var i = 0; i < rows.length; i++) labels.push(rows[i].label);
+        return labels;
     },
 
     _norm: function (s) {
@@ -641,9 +616,6 @@ AIGovAssessmentPrefill.prototype = {
             .trim().toLowerCase();
     },
 
-    // =========================================================================
-    // DIAGNOSE
-    // =========================================================================
     diagnose: function (taskRef) {
         var out = { task_ref: taskRef, steps: [], question_types: {} };
 
@@ -700,7 +672,6 @@ AIGovAssessmentPrefill.prototype = {
             access[t] = e;
         });
 
-        // the two classes the write path depends on
         try {
             new sn_smart_asmt.AssessmentInstanceUtil();
             access._AssessmentInstanceUtil = 'reachable';
