@@ -1,0 +1,136 @@
+// probe_update_failure.js
+// Background script, scope x_1675350_aict_a_0.
+//
+// questionInstRecord.update() returns falsy inside AssessmentInstanceUtilSNC,
+// but a direct update() on the same row succeeds. The difference must be one of
+// the fields _update sets before calling the utility. This finds which.
+//
+// WRITES. Use a scratch assessment. It resets the row between each variant.
+
+var QI = '934c6e5733b7839019f21a7bfd5c7bfc';   // the text question instance
+var VALUE = 'Bisect test.';
+
+(function () {
+
+    var TABLE = 'sn_smart_asmt_question_instance';
+    var log = [], say = function (s) { log.push(s); };
+
+    // ---------------------------------------------------------------- 1
+    say('=== 1. BUSINESS RULES THAT COULD ABORT THE UPDATE ===');
+    say('');
+
+    var br = new GlideRecord('sys_script');
+    br.addQuery('collection', TABLE);
+    br.orderBy('order');
+    br.query();
+    if (!br.hasNext()) say('  (none on this table)');
+    while (br.next()) {
+        var aborts = (br.getValue('script') + '').indexOf('setAbortAction') >= 0;
+        say('  ' + pad(br.getValue('name'), 44) +
+            'active=' + pad(br.getValue('active'), 6) +
+            'when=' + pad(br.getValue('when'), 8) +
+            'order=' + pad(br.getValue('order'), 6) +
+            (aborts ? '  *** CALLS setAbortAction ***' : ''));
+        var cond = br.getValue('condition');
+        if (!gs.nil(cond)) say('      condition: ' + cond);
+    }
+
+    // data policies too
+    say('');
+    var dp = new GlideRecord('sys_data_policy2');
+    dp.addQuery('model_table', TABLE);
+    dp.query();
+    if (!dp.hasNext()) say('  (no data policies)');
+    while (dp.next())
+        say('  data policy: ' + pad(dp.getValue('model_name'), 40) +
+            'active=' + dp.getValue('active') +
+            ' enforce_ui=' + dp.getValue('enforce_ui'));
+
+    // ---------------------------------------------------------------- 2
+    say('');
+    say('=== 2. FIELD-LEVEL WRITE ACCESS FOR THE CURRENT USER ===');
+    say('  (running as ' + gs.getUserName() + ', admin=' + gs.hasRole('admin') + ')');
+    say('');
+
+    var chk = new GlideRecord(TABLE);
+    if (chk.get(QI)) {
+        var fields = ['text_response', 'justification', 'is_responded',
+                      'last_responded_by', 'last_responded_on'];
+        for (var f = 0; f < fields.length; f++) {
+            if (!chk.isValidField(fields[f])) { say('  ' + fields[f] + ': not a field'); continue; }
+            say('  ' + pad(fields[f], 24) + 'canWrite=' + chk[fields[f]].canWrite());
+        }
+    }
+
+    // ---------------------------------------------------------------- 3
+    say('');
+    say('=== 3. BISECT ===');
+    say('');
+
+    run('A  util only, nothing pre-set',        false, false, false);
+    run('B  + is_responded',                    true,  false, false);
+    run('C  + is_responded + last_responded_*', true,  true,  false);
+    run('D  + justification  (what we do now)', true,  true,  true);
+
+    say('');
+    say('  The first variant that FAILS names the field responsible.');
+    say('  If all four succeed here, the call shape is fine and the REST');
+    say('  failure is about the user, not the code — re-run over basic auth.');
+
+    gs.info('\n' + log.join('\n'));
+
+    // ------------------------------------------------------------ helpers
+
+    function reset() {
+        var g = new GlideRecord(TABLE);
+        if (!g.get(QI)) return;
+        g.setValue('text_response', '');
+        g.setValue('is_responded', false);
+        if (g.isValidField('justification')) g.setValue('justification', '');
+        g.update();
+    }
+
+    function run(label, setResponded, setWho, setJustification) {
+        reset();
+
+        var g = new GlideRecord(TABLE);
+        if (!g.get(QI)) { say('  ' + label + ': could not read the row'); return; }
+
+        if (setJustification && g.isValidField('justification'))
+            g.setValue('justification', '[AI-PREFILL] (bisect) test');
+        if (setResponded) g.setValue('is_responded', true);
+        if (setWho) {
+            g.setValue('last_responded_by', gs.getUserID());
+            g.setValue('last_responded_on', new GlideDateTime().getValue());
+        }
+
+        var before = gs.getErrorMessages();
+        var outcome;
+        try {
+            new sn_smart_asmt.AssessmentInstanceUtil()
+                .updateQuestionInstance(g, 'text_response', VALUE, false);
+            outcome = 'ACCEPTED';
+        } catch (e) {
+            outcome = 'REFUSED  "' + (e.message || e) + '"  status=' + (e.status || '-');
+        }
+
+        // did the value actually land?
+        var v = new GlideRecord(TABLE);
+        v.get(QI);
+        var landed = v.getValue('text_response');
+
+        say('  ' + pad(label, 44) + outcome);
+        say('      text_response after: "' + (landed === null ? '' : landed) + '"');
+
+        var after = gs.getErrorMessages();
+        if (after && after.length && after.length !== (before ? before.length : 0))
+            say('      session errors: ' + JSON.stringify(after));
+    }
+
+    function pad(s, n) {
+        s = String(s === null || s === undefined ? '' : s);
+        while (s.length < n) s += ' ';
+        return s + ' ';
+    }
+
+})();
