@@ -1,0 +1,297 @@
+Security restricted: Read operation on table 'sys_script_include' from scope 'AI Control Tower Integrations' was granted and added to 'AI Control Tower Integrations' cross scope privileges
+Time: 0:00:00.424 id: nndev1_1[glide.5] primary_hash=-694809092 (connpid=1576270) for: SELECT sys_script_include0."sys_id" FROM ((sys_script_include sys_script_include0  INNER JOIN sys_metadata sys_metadata0 ON sys_script_include0."sys_id" = sys_metadata0."sys_id" )  LEFT JOIN sys_package sys_package1 ON sys_metadata0."sys_scope" = sys_package1."sys_id" )  WHERE sys_script_include0."script" LIKE ? AND sys_script_include0."name" != ? AND (sys_metadata0."sys_policy" != ? OR sys_metadata0."sys_policy" IS NULL  OR sys_package1."sys_class_name" = ?) ORDER BY sys_script_include0."sys_id" NULLS FIRST 
+Placeholders follow:
+0 (36):%Unable to update question response%
+1 (17):SNCAPICallWrapper
+2 (9):protected
+3 (7):sys_app
+Security restricted: Read operation on table 'sys_dictionary' from scope 'AI Control Tower Integrations' was granted and added to 'AI Control Tower Integrations' cross scope privileges
+x_nn_ai_control_0: 
+=== 1. WHERE THE ERROR IS THROWN ===
+
+  script include: AssessmentInstanceUtilSNC   (b452c241ff0121104a47ffda03cb14ff)
+  ----------------------------------------------------------------
+
+            instanceM2MScopeItemGR.addQuery('assessment_instance', asmtInstId);
+            instanceM2MScopeItemGR.setLimit(1);
+            instanceM2MScopeItemGR.query();
+            return instanceM2MScopeItemGR.hasNext();
+        }
+        return false;
+    },
+
+    _assertResponsePossibleInState: function(asmtState) {
+        if (asmtState === this.ASSESSMENT_WORKFLOW_STATE_CANCELLED || asmtState === this.ASSESSMENT_WORKFLOW_STATE_COMPLETED) {
+            throw {
+                message: gs.getMessage("Question response cannot be updated when the assessment is in a cancelled or completed state"),
+                status: 403
+            };
+        }
+    },
+
+    _updateQuestionInstance: function(questionInstRecord, fieldName, value, isAIResponse) {
+        // prevent update of question instance response if assessment in cancelled/completed state
+        const asmtState = questionInstRecord.assessment_instance.state + "";
+        this.assertResponsePossibleInState(asmtState);
+        questionInstRecord.setValue(fieldName, value);
+        if (this.AI_ASSIST_PLUGIN_ACTIVE) {
+            questionInstRecord.setValue('is_response_ai_suggested', !!isAIResponse);
+        }
+        const isUpdateSuccessful = questionInstRecord.update() ? true : false;
+        if (!isUpdateSuccessful) {
+            let errorMessage = gs.getErrorMessages().pop();
+            errorMessage = !gs.nil(errorMessage) ? errorMessage : gs.getMessage('Unable to update question response');
+            throw {
+                message: errorMessage,
+                status: 406
+            };
+        }
+
+    },
+
+    _updateMultipleResponseOptionInstance: function(responseOptionInstRecord, fieldName, value, questionInstanceRecord, isAIResponse) {
+     
+
+=== 2. updateQuestionInstance SOURCE ===
+
+  AssessmentInstanceUtil: method not present
+  --- AssessmentInstanceUtilSNC ---
+updateQuestionInstance: function(questionInstRecord, fieldName, value, isAIResponse = false) {
+        return this._updateQuestionInstance(questionInstRecord, fieldName, value, isAIResponse);
+    }
+
+
+=== 3. THE RECORD WE ARE TRYING TO WRITE ===
+
+  assessment_instance: 724c2e5733b7839019f21a7bfd5c7bee
+    state:          eacb445acb26211093b90cbfe8076d00  (Open)
+
+  question_instance: 934c6e5733b7839019f21a7bfd5c7bfc
+    assessment_instance            724c2e5733b7839019f21a7bfd5c7bee
+    assessment_question            7f4f86393b8b0f1095594a2a85e45ac4
+    attachment_count               0
+    comment_count                  0
+    currency_response              0
+    evidence_attachment_mandatory  0
+    is_automated_response          0
+    is_responded                   1
+    last_responded_by              18fcd644c3cfd2d06ddd5b43e40131a6
+    last_responded_on              2026-10-14 08:08:06
+    mandatory_result               9f4c6e5733b7839019f21a7bfd5c7bfb
+    order                          1
+    response_type                  not_applicable
+    section_instance               3a4c2e5733b7839019f21a7bfd5c7bf4
+    sys_created_on                 2026-10-13 14:00:47
+    sys_id                         934c6e5733b7839019f21a7bfd5c7bfc
+    sys_updated_on                 2026-10-14 08:08:06
+    text_response                  test
+
+  question definition: 7f4f86393b8b0f1095594a2a85e45ac4
+    created:  2026-09-01 13:16:09 by CPATW20RP@nngroup.onmicrosoft.com
+    active                         1
+    allow_multiselect              0
+    assessment_template            4b4f4e798787cf504e85db173cbb3507
+    attachment_mandatory           0
+    enable_attachment              0
+    enable_justification           0
+    enable_preferred_answer        0
+    enable_response_automation     0
+    enable_time                    0
+    enable_visibility_condition    0
+    justification_mandatory        0
+    label                          How will it be ensured that human autonomy is safeguarded? W
+    mandatory                      1
+    maximum_number                 1000
+    max_characters                 1000
+    minimum_number                 0
+    multiline                      1
+    order                          1
+    question_type                  2396e3b2ff2121104a47ffda03cb1428
+    readonly_response              0
+    response_layout                vertical
+    section                        274f86393b8b0f1095594a2a85e45a66
+    sys_id                         7f4f86393b8b0f1095594a2a85e45ac4
+
+  TIMING CHECK — a question added to the template after the instance
+  was generated is a common cause of a refused write:
+    instance created:   2026-10-13 14:00:46
+    question created:   2026-09-01 13:16:09
+    q-instance created: 2026-10-13 14:00:47
+
+  --- a working choice question on the same instance, for contrast ---
+  question_instance: c74c6e5733b7839019f21a7bfd5c7bd3  "Does the AI System interact with natural persons?
+"
+    assessment_instance            724c2e5733b7839019f21a7bfd5c7bee
+    assessment_question            845fc6393b8b0f1095594a2a85e45a1c
+    attachment_count               0
+    comment_count                  0
+    currency_response              0
+    evidence_attachment_mandatory  0
+    is_automated_response          1
+    is_responded                   1
+    mandatory_result               c34c6e5733b7839019f21a7bfd5c7bd3
+    order                          8
+    response_type                  not_applicable
+    section_instance               be4c2e5733b7839019f21a7bfd5c7bf3
+    selected_response_options      a85fc6393b8b0f1095594a2a85e45aef
+    sys_created_on                 2026-10-13 14:00:47
+    sys_id                         c74c6e5733b7839019f21a7bfd5c7bd3
+    sys_updated_on                 2026-10-13 14:00:48
+
+=== 4. DIRECT WRITE TEST ===
+
+  skipped (TRY_DIRECT_WRITE = false)
+  Set it true to find out whether the refusal is the platform utility
+  being strict, or the row genuinely not being writable.
+
+
+After setting write =true
+
+Time: 0:00:00.310 id: nndev1_1[glide.0] primary_hash=-694809092 (connpid=1576263) for: SELECT sys_script_include0."sys_id" FROM ((sys_script_include sys_script_include0  INNER JOIN sys_metadata sys_metadata0 ON sys_script_include0."sys_id" = sys_metadata0."sys_id" )  LEFT JOIN sys_package sys_package1 ON sys_metadata0."sys_scope" = sys_package1."sys_id" )  WHERE sys_script_include0."script" LIKE ? AND sys_script_include0."name" != ? AND (sys_metadata0."sys_policy" != ? OR sys_metadata0."sys_policy" IS NULL  OR sys_package1."sys_class_name" = ?) ORDER BY sys_script_include0."sys_id" NULLS FIRST 
+Placeholders follow:
+0 (36):%Unable to update question response%
+1 (17):SNCAPICallWrapper
+2 (9):protected
+3 (7):sys_app
+Security restricted: Write operation on table 'sn_smart_asmt_question_instance' from scope 'AI Control Tower Integrations' was granted and added to 'AI Control Tower Integrations' cross scope privileges
+x_nn_ai_control_0: 
+=== 1. WHERE THE ERROR IS THROWN ===
+
+  script include: AssessmentInstanceUtilSNC   (b452c241ff0121104a47ffda03cb14ff)
+  ----------------------------------------------------------------
+
+            instanceM2MScopeItemGR.addQuery('assessment_instance', asmtInstId);
+            instanceM2MScopeItemGR.setLimit(1);
+            instanceM2MScopeItemGR.query();
+            return instanceM2MScopeItemGR.hasNext();
+        }
+        return false;
+    },
+
+    _assertResponsePossibleInState: function(asmtState) {
+        if (asmtState === this.ASSESSMENT_WORKFLOW_STATE_CANCELLED || asmtState === this.ASSESSMENT_WORKFLOW_STATE_COMPLETED) {
+            throw {
+                message: gs.getMessage("Question response cannot be updated when the assessment is in a cancelled or completed state"),
+                status: 403
+            };
+        }
+    },
+
+    _updateQuestionInstance: function(questionInstRecord, fieldName, value, isAIResponse) {
+        // prevent update of question instance response if assessment in cancelled/completed state
+        const asmtState = questionInstRecord.assessment_instance.state + "";
+        this.assertResponsePossibleInState(asmtState);
+        questionInstRecord.setValue(fieldName, value);
+        if (this.AI_ASSIST_PLUGIN_ACTIVE) {
+            questionInstRecord.setValue('is_response_ai_suggested', !!isAIResponse);
+        }
+        const isUpdateSuccessful = questionInstRecord.update() ? true : false;
+        if (!isUpdateSuccessful) {
+            let errorMessage = gs.getErrorMessages().pop();
+            errorMessage = !gs.nil(errorMessage) ? errorMessage : gs.getMessage('Unable to update question response');
+            throw {
+                message: errorMessage,
+                status: 406
+            };
+        }
+
+    },
+
+    _updateMultipleResponseOptionInstance: function(responseOptionInstRecord, fieldName, value, questionInstanceRecord, isAIResponse) {
+     
+
+=== 2. updateQuestionInstance SOURCE ===
+
+  AssessmentInstanceUtil: method not present
+  --- AssessmentInstanceUtilSNC ---
+updateQuestionInstance: function(questionInstRecord, fieldName, value, isAIResponse = false) {
+        return this._updateQuestionInstance(questionInstRecord, fieldName, value, isAIResponse);
+    }
+
+
+=== 3. THE RECORD WE ARE TRYING TO WRITE ===
+
+  assessment_instance: 724c2e5733b7839019f21a7bfd5c7bee
+    state:          eacb445acb26211093b90cbfe8076d00  (Open)
+
+  question_instance: 934c6e5733b7839019f21a7bfd5c7bfc
+    assessment_instance            724c2e5733b7839019f21a7bfd5c7bee
+    assessment_question            7f4f86393b8b0f1095594a2a85e45ac4
+    attachment_count               0
+    comment_count                  0
+    currency_response              0
+    evidence_attachment_mandatory  0
+    is_automated_response          0
+    is_responded                   1
+    last_responded_by              18fcd644c3cfd2d06ddd5b43e40131a6
+    last_responded_on              2026-10-14 08:08:06
+    mandatory_result               9f4c6e5733b7839019f21a7bfd5c7bfb
+    order                          1
+    response_type                  not_applicable
+    section_instance               3a4c2e5733b7839019f21a7bfd5c7bf4
+    sys_created_on                 2026-10-13 14:00:47
+    sys_id                         934c6e5733b7839019f21a7bfd5c7bfc
+    sys_updated_on                 2026-10-14 08:08:06
+    text_response                  test
+
+  question definition: 7f4f86393b8b0f1095594a2a85e45ac4
+    created:  2026-09-01 13:16:09 by CPATW20RP@nngroup.onmicrosoft.com
+    active                         1
+    allow_multiselect              0
+    assessment_template            4b4f4e798787cf504e85db173cbb3507
+    attachment_mandatory           0
+    enable_attachment              0
+    enable_justification           0
+    enable_preferred_answer        0
+    enable_response_automation     0
+    enable_time                    0
+    enable_visibility_condition    0
+    justification_mandatory        0
+    label                          How will it be ensured that human autonomy is safeguarded? W
+    mandatory                      1
+    maximum_number                 1000
+    max_characters                 1000
+    minimum_number                 0
+    multiline                      1
+    order                          1
+    question_type                  2396e3b2ff2121104a47ffda03cb1428
+    readonly_response              0
+    response_layout                vertical
+    section                        274f86393b8b0f1095594a2a85e45a66
+    sys_id                         7f4f86393b8b0f1095594a2a85e45ac4
+
+  TIMING CHECK — a question added to the template after the instance
+  was generated is a common cause of a refused write:
+    instance created:   2026-10-13 14:00:46
+    question created:   2026-09-01 13:16:09
+    q-instance created: 2026-10-13 14:00:47
+
+  --- a working choice question on the same instance, for contrast ---
+  question_instance: c74c6e5733b7839019f21a7bfd5c7bd3  "Does the AI System interact with natural persons?
+"
+    assessment_instance            724c2e5733b7839019f21a7bfd5c7bee
+    assessment_question            845fc6393b8b0f1095594a2a85e45a1c
+    attachment_count               0
+    comment_count                  0
+    currency_response              0
+    evidence_attachment_mandatory  0
+    is_automated_response          1
+    is_responded                   1
+    mandatory_result               c34c6e5733b7839019f21a7bfd5c7bd3
+    order                          8
+    response_type                  not_applicable
+    section_instance               be4c2e5733b7839019f21a7bfd5c7bf3
+    selected_response_options      a85fc6393b8b0f1095594a2a85e45aef
+    sys_created_on                 2026-10-13 14:00:47
+    sys_id                         c74c6e5733b7839019f21a7bfd5c7bd3
+    sys_updated_on                 2026-10-13 14:00:48
+
+=== 4. DIRECT WRITE TEST ===
+
+  GlideRecord.update() returned: 934c6e5733b7839019f21a7bfd5c7bfc
+  text_response now: "Probe write test."
+  is_responded now:  1
+
+  If this stuck, the row is writable and updateQuestionInstance is
+  refusing for a reason section 1 will name.
+  If it did NOT stick, a business rule is aborting the write.
