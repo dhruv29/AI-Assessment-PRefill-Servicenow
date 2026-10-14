@@ -1,0 +1,77 @@
+Security restricted: Read operation on table 'sys_script' from scope 'AI Control Tower Integrations' was granted and added to 'AI Control Tower Integrations' cross scope privileges
+Security restricted: Read operation on table 'sys_data_policy2' from scope 'AI Control Tower Integrations' was granted and added to 'AI Control Tower Integrations' cross scope privileges
+Security restricted: Execute operation on API 'Glide API: user roles and groups' from scope 'AI Control Tower Integrations' was granted and added to 'AI Control Tower Integrations' cross scope privileges
+AccessTerm: Slow ACL  be43aa09cbf2a11093b90cbfe8076df8 for the  path record/sn_smart_asmt_question_instance/write  , time was: 6
+
+AccessTerm: Slow ACL  2f6a0410cb43651093b90cbfe8076d99 for the  path record/sn_smart_asmt_question_instance.text_response/write  , time was: 11
+
+Background message, type:error, message: Justification not allowed for text type questions
+Operation against file 'sn_smart_asmt_question_instance' was aborted by Business Rule 'Abort justification save for textbox^934c6e5733b7839019f21a7bfd5c7bfc'. Business Rule Stack:Abort justification save for textbox
+x_nn_ai_control_0: 
+=== 1. BUSINESS RULES THAT COULD ABORT THE UPDATE ===
+
+  Update is automated response flag            active=1      when=before   order=0      
+      condition: current.getRecordClassName() === 'sn_smart_asmt_question_instance'
+  Stop multi ref ans if not multiselect        active=1      when=before   order=50       *** CALLS setAbortAction ***
+      condition: current.getRecordClassName() === 'sn_smart_asmt_question_instance'
+  Show justification tag on responder          active=1      when=before   order=100    
+      condition: current.getRecordClassName() === 'sn_smart_asmt_question_instance'
+  Validate text response                       active=1      when=before   order=100      *** CALLS setAbortAction ***
+      condition: current.getRecordClassName() === 'sn_smart_asmt_question_instance'
+  Validate number response                     active=1      when=before   order=100      *** CALLS setAbortAction ***
+      condition: current.getRecordClassName() === 'sn_smart_asmt_question_instance'
+  Response changes                             active=1      when=after    order=100    
+      condition: current.getRecordClassName() === 'sn_smart_asmt_question_instance'
+  Abort inactive quest instance creation       active=1      when=before   order=100      *** CALLS setAbortAction ***
+      condition: current.getRecordClassName() === 'sn_smart_asmt_question_instance'
+  Abort justification save for textbox         active=1      when=before   order=100      *** CALLS setAbortAction ***
+      condition: current.getRecordClassName() === 'sn_smart_asmt_question_instance'
+  Clear is responded & set related fields      active=1      when=before   order=100    
+      condition: current.getRecordClassName() === 'sn_smart_asmt_question_instance'
+  Set total,unans req,opt count - sec inst     active=1      when=after    order=100    
+      condition: current.getRecordClassName() === 'sn_smart_asmt_question_instance'
+  Set comments count in question instance      active=1      when=before   order=100    
+      condition: current.getRecordClassName() === 'sn_smart_asmt_question_instance'
+  Set is responded and related fields          active=1      when=before   order=100    
+      condition: current.getRecordClassName() === 'sn_smart_asmt_question_instance'
+  Abort justification save for barcode         active=1      when=before   order=100      *** CALLS setAbortAction ***
+      condition: current.getRecordClassName() === 'sn_smart_asmt_question_instance'
+  Set initial responseType on insert           active=1      when=before   order=100    
+      condition: current.getRecordClassName() === 'sn_smart_asmt_question_instance'
+  Validate reference response                  active=1      when=before   order=100      *** CALLS setAbortAction ***
+      condition: current.getRecordClassName() === 'sn_smart_asmt_question_instance'
+  Set assoc visibility result  domain          active=1      when=before   order=100    
+      condition: current.getRecordClassName() === 'sn_smart_asmt_question_instance'
+  Set justfn and attchmnt count in section     active=1      when=after    order=100    
+      condition: current.getRecordClassName() === 'sn_smart_asmt_question_instance'
+
+  data policy:                                          active=1 enforce_ui=0
+  data policy:                                          active=1 enforce_ui=1
+  data policy:                                          active=1 enforce_ui=0
+  data policy:                                          active=1 enforce_ui=0
+  data policy:                                          active=1 enforce_ui=0
+  data policy:                                          active=1 enforce_ui=0
+
+=== 2. FIELD-LEVEL WRITE ACCESS FOR THE CURRENT USER ===
+  (running as CPAQV12PB@nngroup.onmicrosoft.com, admin=true)
+
+  text_response            canWrite=true
+  justification            canWrite=true
+  is_responded             canWrite=false
+  last_responded_by        canWrite=false
+  last_responded_on        canWrite=false
+
+=== 3. BISECT ===
+
+  A  util only, nothing pre-set                ACCEPTED
+      text_response after: "Bisect test."
+  B  + is_responded                            ACCEPTED
+      text_response after: "Bisect test."
+  C  + is_responded + last_responded_*         ACCEPTED
+      text_response after: "Bisect test."
+  D  + justification  (what we do now)         REFUSED  "Unable to update question response"  status=406
+      text_response after: ""
+
+  The first variant that FAILS names the field responsible.
+  If all four succeed here, the call shape is fine and the REST
+  failure is about the user, not the code — re-run over basic auth.
